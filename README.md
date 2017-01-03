@@ -39,10 +39,10 @@ The `kidney_solver` program has three required command-line arguments: cycle cap
 
 The optional flag `-r` can be used to solve on a copy of the graph with vertices relabelled in descending order of out-degree plus in-degree, which may result in a smaller IP model. To set a time limit of LIMIT seconds, use `-t LIMIT`.
 
-###Calculating Core Size
-The optional flag '-m' can be used to find all optimal solutions (the core), rather than just one. This takes slightly longer than calculating only one optimal solution.
-
 If the cycle formulation or PICEF is used, failure-aware matching with uniform edge failure probability can be performed with `-p EDGE-SUCCESS-PROB`.
+
+###Calculating Core Size
+The optional flag `-m` can be used to find all optimal solutions (the core), rather than just one. This takes slightly longer than calculating only one optimal solution.
 
 ###Examples
 
