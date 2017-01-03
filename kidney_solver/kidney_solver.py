@@ -32,7 +32,11 @@ def solve_kep(cfg, formulation, use_relabelled=True):
             opt_result = kidney_ip.optimise_relabelled(formulation_fun, cfg)
         else:
             opt_result = formulation_fun(cfg)
-        kidney_utils.check_validity(opt_result, cfg.digraph, cfg.ndds, cfg.max_cycle, cfg.max_chain)
+        if cfg.multi: # added by Duncan
+            for sol in opt_result.solutions:
+               kidney_utils.check_validity(sol, cfg.digraph, cfg.ndds, cfg.max_cycle, cfg.max_chain)
+        else:
+            kidney_utils.check_validity(opt_result, cfg.digraph, cfg.ndds, cfg.max_cycle, cfg.max_chain)
         opt_result.formulation_name = formulation_name
         return opt_result
     else:
@@ -68,6 +72,9 @@ def start():
     parser.add_argument("--relax", "-x", required=False,
             action='store_true',
             help="Solve the LP relaxation.")
+    parser.add_argument("--multi", "-m", required=False, # added by Duncan
+            action='store_true',
+            help="Search for multiple solutions.")
             
     args = parser.parse_args()
     args.formulation = args.formulation.lower()
@@ -87,7 +94,7 @@ def start():
     start_time = time.time()
     cfg = kidney_ip.OptConfig(d, altruists, args.cycle_cap, args.chain_cap, args.verbose,
                               args.timelimit, args.edge_success_prob, args.eef_alt_constraints,
-                              args.lp_file, args.relax)
+                              args.lp_file, args.relax, args.multi) # added multi -- Duncan
     opt_solution = solve_kep(cfg, args.formulation, args.use_relabelled)
     time_taken = time.time() - start_time
     print "formulation: {}".format(args.formulation)
@@ -103,7 +110,10 @@ def start():
     print "ip_solve_time: {}".format(opt_solution.ip_model.runtime)
     print "solver_status: {}".format(opt_solution.ip_model.status)
     print "total_score: {}".format(opt_solution.total_score)
-    opt_solution.display()
+    if args.multi: # added by Duncan
+        print "core size : {}".format(opt_solution.size)
+    else:
+        opt_solution.display()
 
 if __name__=="__main__":
     start()

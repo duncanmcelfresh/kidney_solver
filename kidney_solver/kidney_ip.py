@@ -9,6 +9,8 @@ import kidney_utils
 
 from gurobipy import *
 
+import numpy as np # added by Duncan
+
 ###################################################################################################
 #                                                                                                 #
 #                                  Code used by all formulations                                  #
@@ -33,7 +35,7 @@ class OptConfig(object):
 
     def __init__(self, digraph, ndds, max_cycle, max_chain, verbose=False,
                  timelimit=None, edge_success_prob=1, eef_alt_constraints=False,
-                 lp_file=None, relax=False):
+                 lp_file=None, relax=False, multi=False):
         self.digraph = digraph
         self.ndds = ndds
         self.max_cycle = max_cycle
@@ -44,6 +46,7 @@ class OptConfig(object):
         self.eef_alt_constraints = eef_alt_constraints
         self.lp_file = lp_file
         self.relax = relax
+        self.multi = multi # added by Duncan
 
 class OptSolution(object):
     """An optimal solution for a kidney-exchange problem instance.
@@ -66,6 +69,18 @@ class OptSolution(object):
                 sum(failure_aware_cycle_score(c, digraph, edge_success_prob) for c in cycles))
         self.edge_success_prob = edge_success_prob
 
+    # added by Duncan
+    def __eq__(self,other):
+        """Equal optsolutions have the same set of cycles and chains."""
+        if type(self) != type(other):
+            return False
+        if self.cycles != other.cycles:
+            return False
+        if self.chains != other.chains:
+            return False
+        else:
+            return True
+        
     def display(self):
         """Print the optimal cycles and chains to standard output."""
 
@@ -86,6 +101,20 @@ class OptSolution(object):
         for c in self.chains:
             print str(c.ndd_index) + "\t" + "\t".join(str(v) for v in c.vtx_indices)
 
+    # added by Duncan
+    def vertex_mask(self):
+        """Returns a numpy array of length |V| containing 1 if the vertex
+        participates in the solution, and zero otherwise."""
+        # cs is a list of cycles, with each cycle represented as a list of vertex IDs
+        cs = [[v.id for v in c] for c in self.cycles] # cycles
+        ch = [[v for v in c.vtx_indices] for c in self.chains] # chains
+        ndd = [c.ndd_index for c in self.chains] # ndds
+        v_mask = np.zeros(self.digraph.n)   
+        v_mask[ np.concatenate(cs) ] = 1
+        v_mask[ np.concatenate(ch) ] = 1
+        v_mask[ ndd ] = 1
+        return v_mask
+
     def relabelled_copy(self, old_to_new_vertices, new_digraph):
         """Create a copy of the solution with vertices relabelled.
 
@@ -102,6 +131,37 @@ class OptSolution(object):
                              for c in self.chains]
         return OptSolution(self.ip_model, relabelled_cycles, relabelled_chains,
                            new_digraph, self.edge_success_prob)
+
+# class added by Duncan
+class OptCore(object):
+    """The set of optimal matchings in a kidney-exchange problem instance.
+    
+    Data members:
+        ip_model: The Gurobi Model object
+        solutions: The list of optimal solutions (OptSolution objects)
+        total_score: The total score of the solutions
+    """
+    def __init__(self, ip_model, digraph, solutions):
+        self.ip_model = ip_model
+        self.digraph = digraph
+        self.total_score = solutions[0].total_score        
+        self.solutions = solutions
+        self.size = len(solutions)
+
+    def display(self):
+        print "Core size: ",len(self.solutions)
+        print "score    : ",self.total_score 
+
+#    def remove_redundant_solutions(self):
+        
+    def vertex_participation(self):
+        """Return a numpy array containing the number of optimal solutions that
+        each vertex participates in."""
+        v_part = np.zeros(self.digraph.n)
+        for sol in self.solutions:
+            v_part += sol.vertex_mask()
+        return v_part
+            
 
 def optimise(model, cfg):
     if cfg.lp_file:
@@ -146,13 +206,19 @@ def optimise_relabelled(formulation_fun, cfg):
     opt_result = formulation_fun(relabelled_cfg)
     return opt_result.relabelled_copy(sorted_vertices, cfg.digraph)
 
-def create_ip_model(time_limit, verbose):
+# def create_ip_model(time_limit, verbose): # changed by Duncan
+def create_ip_model(time_limit, verbose, multi=False):
     """Create a Gurobi Model."""
 
     m = Model("kidney-mip")
     if not verbose:
         m.params.outputflag = 0
     m.params.mipGap = 0
+    if multi:
+        maxSol = 1000
+        m.setParam(GRB.Param.PoolSolutions,maxSol) # number of solutions to collect
+        m.setParam(GRB.Param.PoolGap, 0) # only collect optimal solutions (gap = 0)
+        m.setParam(GRB.Param.PoolSearchMode, 2) # exhaustive search
     if time_limit is not None:
         m.params.timelimit = time_limit
     return m
@@ -426,7 +492,8 @@ def optimise_hpief_prime(cfg, full_red=False, hpief_2_prime=False):
     if cfg.max_cycle < 3:
         hpief_2_prime = False
 
-    m = create_ip_model(cfg.timelimit, cfg.verbose)
+#    m = create_ip_model(cfg.timelimit, cfg.verbose) # changed by Duncan
+    m = create_ip_model(cfg.timelimit, cfg.verbose, multi=cfg.multi) # changed by Duncan
     m.params.method = 2
     m.params.presolve = 0
 
@@ -455,20 +522,46 @@ def optimise_hpief_prime(cfg, full_red=False, hpief_2_prime=False):
     
     m.setObjective(obj_expr, GRB.MAXIMIZE)
     optimise(m, cfg)
-
-    cycle_start_vv = []
-    cycle_next_vv = {}
-    
-    for var, pos, edge, low_v_id in vars_and_edges:
-        if var.x > 0.1:
-            cycle_next_vv[edge.src.id] = edge.tgt.id
-            if pos == 1:
-                cycle_start_vv.append(low_v_id)
-                cycle_next_vv[low_v_id] = edge.src.id
-            if hpief_2_prime and pos == cfg.max_cycle - 2 and edge.tgt.id != low_v_id:
-                cycle_next_vv[edge.tgt.id] = low_v_id
         
-    return OptSolution(ip_model=m,
+    if cfg.multi:
+        nSolutions = m.SolCount
+        solutions = [None] * nSolutions
+        print 'Number of solutions found: ' + str(nSolutions)
+        for n_sol in range(nSolutions):
+            m.setParam(GRB.Param.SolutionNumber, n_sol)
+            cycle_start_vv = []
+            cycle_next_vv = {}
+        
+            for var, pos, edge, low_v_id in vars_and_edges:
+                if var.x > 0.1:
+                    cycle_next_vv[edge.src.id] = edge.tgt.id
+                    if pos == 1:
+                        cycle_start_vv.append(low_v_id)
+                        cycle_next_vv[low_v_id] = edge.src.id
+                    if hpief_2_prime and pos == cfg.max_cycle - 2 and edge.tgt.id != low_v_id:
+                        cycle_next_vv[edge.tgt.id] = low_v_id  
+
+            solutions[n_sol] = OptSolution(ip_model=m,
+                           cycles=kidney_utils.selected_edges_to_cycles(
+                           cfg.digraph, cycle_start_vv, cycle_next_vv),
+                           chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(cfg.digraph, cfg.ndds),
+                           digraph=cfg.digraph)
+
+        return OptCore(m, cfg.digraph, solutions)
+    else:        
+        cycle_start_vv = []
+        cycle_next_vv = {}
+        
+        for var, pos, edge, low_v_id in vars_and_edges:
+            if var.x > 0.1:
+                cycle_next_vv[edge.src.id] = edge.tgt.id
+                if pos == 1:
+                    cycle_start_vv.append(low_v_id)
+                    cycle_next_vv[low_v_id] = edge.src.id
+                if hpief_2_prime and pos == cfg.max_cycle - 2 and edge.tgt.id != low_v_id:
+                    cycle_next_vv[edge.tgt.id] = low_v_id  
+            
+        return OptSolution(ip_model=m,
                        cycles=kidney_utils.selected_edges_to_cycles(
                                     cfg.digraph, cycle_start_vv, cycle_next_vv),
                        chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(cfg.digraph, cfg.ndds),
@@ -513,7 +606,8 @@ def optimise_picef(cfg):
 
     cycles = cfg.digraph.find_cycles(cfg.max_cycle)
 
-    m = create_ip_model(cfg.timelimit, cfg.verbose)
+    # m = create_ip_model(cfg.timelimit, cfg.verbose)
+    m = create_ip_model(cfg.timelimit, cfg.verbose, multi=cfg.multi) # changed by Duncan
     m.params.method = 2
 
     cycle_vars = [m.addVar(vtype=GRB.BINARY) for __ in cycles]
@@ -550,12 +644,34 @@ def optimise_picef(cfg):
     m.setObjective(obj_expr, GRB.MAXIMIZE)
     optimise(m, cfg)
 
-    return OptSolution(ip_model=m,
-                       cycles=[c for c, v in zip(cycles, cycle_vars) if v.x > 0.5],
-                       chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(
-                            cfg.digraph, cfg.ndds, cfg.edge_success_prob),
-                       digraph=cfg.digraph,
-                       edge_success_prob=cfg.edge_success_prob)
+    if cfg.multi:
+        # Print number of solutions stored
+        nSolutions = m.SolCount
+        solutions = [None] * nSolutions
+        for n_sol in range(nSolutions):
+            m.setParam(GRB.Param.SolutionNumber, n_sol)
+            solutions[n_sol] = OptSolution(ip_model=m,
+                           cycles=[c for c, v in zip(cycles, cycle_vars) if v.Xn > 0.5],
+                           chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(
+                                cfg.digraph, cfg.ndds, cfg.edge_success_prob),
+                           digraph=cfg.digraph,
+                           edge_success_prob=cfg.edge_success_prob)
+        # Print objective values of solutions
+#        for e in range(nSolutions):
+#            m.setParam(GRB.Param.SolutionNumber, e)
+#            print '%g ' % m.PoolObjVal
+##            if e % 15 == 14:
+##                print('')
+#        print '' 
+       
+        return OptCore(m, cfg.digraph, solutions)
+    else:
+        return OptSolution(ip_model=m,
+                           cycles=[c for c, v in zip(cycles, cycle_vars) if v.x > 0.5],
+                           chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(
+                                cfg.digraph, cfg.ndds, cfg.edge_success_prob),
+                           digraph=cfg.digraph,
+                           edge_success_prob=cfg.edge_success_prob)
 
 ###################################################################################################
 #                                                                                                 #
