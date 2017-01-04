@@ -41,6 +41,11 @@ The optional flag `-r` can be used to solve on a copy of the graph with vertices
 
 If the cycle formulation or PICEF is used, failure-aware matching with uniform edge failure probability can be performed with `-p EDGE-SUCCESS-PROB`.
 
+###Calculating Core Size
+The optional flag `-m` can be used to find all optimal solutions (the core), rather than just one. This takes slightly longer than calculating only one optimal solution.
+
+###Examples
+
 *Example 1:* .wmd format input
 
 ```
