@@ -73,9 +73,11 @@ def start():
             action='store_true',
             help="Solve the LP relaxation.")
     parser.add_argument("--multi", "-m", required=False, # added by Duncan
-            action='store_true',
-            help="Search for multiple solutions.")
-            
+            type=int, default=1,
+            help="Search for multiple solutions. (Specify the maximum number of solutions to search for, default = 1)")
+    parser.add_argument("--output-core", "-o", required=False, # added by Duncan
+            metavar='FILE', default=None,
+            help="Output file with cores size and vertex participation")
     args = parser.parse_args()
     args.formulation = args.formulation.lower()
 
@@ -97,22 +99,34 @@ def start():
                               args.lp_file, args.relax, args.multi) # added multi -- Duncan
     opt_solution = solve_kep(cfg, args.formulation, args.use_relabelled)
     time_taken = time.time() - start_time
-    print "formulation: {}".format(args.formulation)
-    print "formulation_name: {}".format(opt_solution.formulation_name)
-    print "using_relabelled: {}".format(args.use_relabelled)
-    print "cycle_cap: {}".format(args.cycle_cap)
-    print "chain_cap: {}".format(args.chain_cap)
-    print "edge_success_prob: {}".format(args.edge_success_prob)
-    print "ip_time_limit: {}".format(args.timelimit)
-    print "ip_vars: {}".format(opt_solution.ip_model.numVars)
-    print "ip_constrs: {}".format(opt_solution.ip_model.numConstrs)
-    print "total_time: {}".format(time_taken)
-    print "ip_solve_time: {}".format(opt_solution.ip_model.runtime)
-    print "solver_status: {}".format(opt_solution.ip_model.status)
-    print "total_score: {}".format(opt_solution.total_score)
-    if args.multi: # added by Duncan
+    if args.multi > 1: # added by Duncan
+        print "formulation: {}".format(args.formulation)
+        print "formulation_name: {}".format(opt_solution.formulation_name)
+        print "using_relabelled: {}".format(args.use_relabelled)
+        print "cycle_cap: {}".format(args.cycle_cap)
+        print "chain_cap: {}".format(args.chain_cap)
+        print "total_time: {}".format(time_taken)
+        print "ip_solve_time: {}".format(opt_solution.ip_model.runtime)
+        print "# pairs : {}".format(cfg.digraph.n)
+        print "# NDDs : {}".format(len(cfg.ndds))
+        print "max core size: {}".format(args.multi)
         print "core size : {}".format(opt_solution.size)
+        if args.output_core:
+            opt_solution.write_to_file(args.output_core, args.cycle_cap, args.chain_cap, len(altruists) )
     else:
+        print "formulation: {}".format(args.formulation)
+        print "formulation_name: {}".format(opt_solution.formulation_name)
+        print "using_relabelled: {}".format(args.use_relabelled)
+        print "cycle_cap: {}".format(args.cycle_cap)
+        print "chain_cap: {}".format(args.chain_cap)
+        print "edge_success_prob: {}".format(args.edge_success_prob)
+        print "ip_time_limit: {}".format(args.timelimit)
+        print "ip_vars: {}".format(opt_solution.ip_model.numVars)
+        print "ip_constrs: {}".format(opt_solution.ip_model.numConstrs)
+        print "total_time: {}".format(time_taken)
+        print "ip_solve_time: {}".format(opt_solution.ip_model.runtime)
+        print "solver_status: {}".format(opt_solution.ip_model.status)
+        print "total_score: {}".format(opt_solution.total_score)
         opt_solution.display()
 
 if __name__=="__main__":

@@ -35,7 +35,7 @@ class OptConfig(object):
 
     def __init__(self, digraph, ndds, max_cycle, max_chain, verbose=False,
                  timelimit=None, edge_success_prob=1, eef_alt_constraints=False,
-                 lp_file=None, relax=False, multi=False):
+                 lp_file=None, relax=False, multi=1):
         self.digraph = digraph
         self.ndds = ndds
         self.max_cycle = max_cycle
@@ -106,13 +106,15 @@ class OptSolution(object):
         """Returns a numpy array of length |V| containing 1 if the vertex
         participates in the solution, and zero otherwise."""
         # cs is a list of cycles, with each cycle represented as a list of vertex IDs
-        cs = [[v.id for v in c] for c in self.cycles] # cycles
-        ch = [[v for v in c.vtx_indices] for c in self.chains] # chains
-        ndd = [c.ndd_index for c in self.chains] # ndds
-        v_mask = np.zeros(self.digraph.n)   
-        v_mask[ np.concatenate(cs) ] = 1
-        v_mask[ np.concatenate(ch) ] = 1
-        v_mask[ ndd ] = 1
+        v_list = list()
+        for cy in self.cycles:
+            v_list.append([v.id for v in cy])
+        for ch in self.chains:
+            v_list.append([v for v in ch.vtx_indices])
+#        cy_verts = [v.id for v in self.cycles if self.cycles]
+#        ch_verts = [v.id for v in self.chains if self.chains]
+        v_mask = np.zeros(self.digraph.n, dtype=np.int)   
+        v_mask[ np.concatenate(v_list) ] = 1
         return v_mask
 
     def relabelled_copy(self, old_to_new_vertices, new_digraph):
@@ -141,27 +143,44 @@ class OptCore(object):
         solutions: The list of optimal solutions (OptSolution objects)
         total_score: The total score of the solutions
     """
-    def __init__(self, ip_model, digraph, solutions):
+    def __init__(self, ip_model, digraph, max_size, solutions):
         self.ip_model = ip_model
         self.digraph = digraph
         self.total_score = solutions[0].total_score        
         self.solutions = solutions
         self.size = len(solutions)
+        self.max_size = max_size
 
     def display(self):
-        print "Core size: ",len(self.solutions)
-        print "score    : ",self.total_score 
+        print "number of optimal exchanges: {}".format(len(self.solutions))
+        print "number of optima requested: {}".format(self.max_size)
+        print "score: {}".format(self.total_score) 
+        print "pairs: {}".format(self.digraph.n)
+        print "NDDs: {}".format("???")
 
 #    def remove_redundant_solutions(self):
         
     def vertex_participation(self):
         """Return a numpy array containing the number of optimal solutions that
         each vertex participates in."""
-        v_part = np.zeros(self.digraph.n)
+        v_part = np.zeros(self.digraph.n, dtype=np.int)
         for sol in self.solutions:
             v_part += sol.vertex_mask()
         return v_part
-            
+        
+    def write_to_file(self, filename, cycle_cap, chain_cap, ndds):
+        v_part = self.vertex_participation()
+        with open(filename,'w') as f:
+            f.write("number of optimal exchanges: {}\n".format(len(self.solutions)))
+            f.write("number of optima requested: {}\n".format(self.max_size))
+            f.write("score: {}\n".format(self.total_score) )
+            f.write("chain cap: {}\n".format(chain_cap))
+            f.write("cycle cap: {}\n".format(cycle_cap))
+            f.write("pairs: {}\n".format(self.digraph.n))
+            f.write("NDDs: {}\n".format(ndds))
+            f.write("{0:5s} : {1:7s}\n".format("vertx","participation"))
+            for i,vp in enumerate(v_part):
+                f.write("{0:5d} : {1:7d}\n".format(i,vp))               
 
 def optimise(model, cfg):
     if cfg.lp_file:
@@ -207,16 +226,15 @@ def optimise_relabelled(formulation_fun, cfg):
     return opt_result.relabelled_copy(sorted_vertices, cfg.digraph)
 
 # def create_ip_model(time_limit, verbose): # changed by Duncan
-def create_ip_model(time_limit, verbose, multi=False):
+def create_ip_model(time_limit, verbose, multi=1):
     """Create a Gurobi Model."""
 
     m = Model("kidney-mip")
     if not verbose:
         m.params.outputflag = 0
     m.params.mipGap = 0
-    if multi:
-        maxSol = 1000
-        m.setParam(GRB.Param.PoolSolutions,maxSol) # number of solutions to collect
+    if multi > 1:
+        m.setParam(GRB.Param.PoolSolutions,multi) # number of solutions to collect
         m.setParam(GRB.Param.PoolGap, 0) # only collect optimal solutions (gap = 0)
         m.setParam(GRB.Param.PoolSearchMode, 2) # exhaustive search
     if time_limit is not None:
@@ -523,7 +541,7 @@ def optimise_hpief_prime(cfg, full_red=False, hpief_2_prime=False):
     m.setObjective(obj_expr, GRB.MAXIMIZE)
     optimise(m, cfg)
         
-    if cfg.multi:
+    if cfg.multi > 1:
         nSolutions = m.SolCount
         solutions = [None] * nSolutions
         print 'Number of solutions found: ' + str(nSolutions)
@@ -547,7 +565,7 @@ def optimise_hpief_prime(cfg, full_red=False, hpief_2_prime=False):
                            chains=[] if cfg.max_chain==0 else kidney_utils.get_optimal_chains(cfg.digraph, cfg.ndds),
                            digraph=cfg.digraph)
 
-        return OptCore(m, cfg.digraph, solutions)
+        return OptCore(m, cfg.digraph, cfg.multi,  solutions)
     else:        
         cycle_start_vv = []
         cycle_next_vv = {}
@@ -644,7 +662,7 @@ def optimise_picef(cfg):
     m.setObjective(obj_expr, GRB.MAXIMIZE)
     optimise(m, cfg)
 
-    if cfg.multi:
+    if cfg.multi > 1:
         # Print number of solutions stored
         nSolutions = m.SolCount
         solutions = [None] * nSolutions
@@ -664,7 +682,7 @@ def optimise_picef(cfg):
 ##                print('')
 #        print '' 
        
-        return OptCore(m, cfg.digraph, solutions)
+        return OptCore(m, cfg.digraph, cfg.multi, solutions)
     else:
         return OptSolution(ip_model=m,
                            cycles=[c for c, v in zip(cycles, cycle_vars) if v.x > 0.5],
